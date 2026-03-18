@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Auto-Scan Talking Aid - Threshold Unified</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
+        }
+        #ui-layer {
+            position: absolute;
+            bottom: 5px;
+            right: 15px;
+            z-index: 100;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 14px;
+            display: flex;
+            gap: 15px;
+        }
+        canvas#output_canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 1;
+            opacity: 0.4;
+        }
+        video#input_video { display: none; }
+        #talking-aid-container {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            bottom: 30px; 
+            background: rgba(255, 255, 255, 0.15); 
+            border-radius: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 15px;
+            z-index: 10;
+            backdrop-filter: blur(4px);
+        }
+        #textarea {
+            width: 100%;
+            height: 100px;
+            font-size: 40px; 
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 10px;
+            box-sizing: border-box;
+            background: rgba(255, 255, 255, 0.9); 
+            color: black;
+            resize: none;
+        }
+        #keyboard-grid {
+            display: grid;
+            grid-template-columns: repeat(11, 1fr);
+            grid-template-rows: repeat(6, 1fr);
+            gap: 6px;
+            flex: 1;
+        }
+        .key {
+            background: rgba(255, 255, 255, 0.8); 
+            border: 3px solid transparent;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #000;
+            box-sizing: border-box;
+        }
+        .key.active {
+            border-color: #ff3b30;
+            background: #fffb00;
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(255, 251, 0, 0.8);
+            z-index: 20;
+        }
+        .key-special {
+            background: rgba(240, 230, 220, 0.9);
+            color: #a04030;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="status">準備中...</div>
+        <div id="mode-display">速度: 1.0秒</div>
+        <div id="dir-display">方向: 停止中</div>
+    </div>
+
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+
+    <div id="talking-aid-container">
+        <textarea id="textarea" readonly placeholder="顔の表情で操作"></textarea>
+        <div id="keyboard-grid">
+            <div class="key key-special">話す</div>
+            <div class="key">あ</div> <div class="key">か</div> <div class="key">さ</div> <div class="key">た</div> <div class="key">な</div> <div class="key">は</div> <div class="key">ま</div> <div class="key">や</div> <div class="key">ら</div> <div class="key">わ</div>
+            <div class="key key-special">一字消</div>
+            <div class="key">い</div> <div class="key">き</div> <div class="key">し</div> <div class="key">ち</div> <div class="key">に</div> <div class="key">ひ</div> <div class="key">み</div> <div class="key">、</div> <div class="key">り</div> <div class="key">を</div>
+            <div class="key key-special">全消去</div>
+            <div class="key">う</div> <div class="key">く</div> <div class="key">す</div> <div class="key">つ</div> <div class="key">ぬ</div> <div class="key">ふ</div> <div class="key">む</div> <div class="key">ゆ</div> <div class="key">る</div> <div class="key">ん</div>
+            <div class="key key-special">゛</div>
+            <div class="key">え</div> <div class="key">け</div> <div class="key">せ</div> <div class="key">て</div> <div class="key">ね</div> <div class="key">へ</div> <div class="key">め</div> <div class="key">。</div> <div class="key">れ</div> <div class="key key-special">空白</div>
+            <div class="key key-special">゜</div>
+            <div class="key">お</div> <div class="key">こ</div> <div class="key">そ</div> <div class="key">と</div> <div class="key">の</div> <div class="key">ほ</div> <div class="key">も</div> <div class="key">よ</div> <div class="key">ろ</div> <div class="key key-special">小文字</div>
+            <div class="key">1</div> <div class="key">2</div> <div class="key">3</div> <div class="key">4</div> <div class="key">5</div> <div class="key">6</div> <div class="key">7</div> <div class="key">8</div> <div class="key">9</div> <div class="key">0</div> <div class="key key-special">リセット</div>
+        </div>
+    </div>
+
+<script>
+const videoElement = document.getElementById('input_video');
+const canvasElement = document.getElementById('output_canvas');
+const canvasCtx = canvasElement.getContext('2d');
+const statusDiv = document.getElementById('status');
+const dirDiv = document.getElementById('dir-display');
+const textarea = document.getElementById('textarea');
+const keys = document.querySelectorAll('.key');
+
+// 設定定数
+const COL_COUNT = 11;
+const ROW_COUNT = 6;
+const SCAN_INTERVAL = 1000; 
+const TRIGGER_WAIT = 800;   
+const STOP_HOLD_TIME = 2000; 
+
+// 感度調整（数値が小さいほど敏感）
+const MOUTH_OPEN_SENSITIVITY = 2.3; // 口あけ判定：2.5から2.0に緩和（下移動・停止共通）
+const PUCKER_SENSITIVITY = 0.85;    // 口すぼめ判定：緩和済み
+
+let isCalibrated = false;
+let isResetting = false; 
+let calibrationData = {};
+let currentRow = 0;
+let currentCol = 0;
+let currentDir = 'NONE'; 
+let lastScanTime = 0;
+let lastTriggerTime = 0;
+
+// 口あけ制御
+let mouthOpenStartTime = 0;
+let isStopActionTriggered = false; 
+
+const dakutenMap = {'か':'が','き':'ぎ','く':'ぐ','け':'げ','こ':'ご','さ':'ざ','し':'じ','す':'ず','せ':'ぜ','そ':'ぞ','た':'だ','ち':'ぢ','つ':'づ','て':'で','と':'ど','は':'ば','ひ':'び','ふ':'ぶ','へ':'べ','ほ':'ぼ','が':'か','ぎ':'き','ぐ':'く','げ':'け','ご':'こ','ざ':'さ','じ':'し','ず':'す','ぜ':'ぜ','ぞ':'そ','だ':'た','ぢ':'ち','づ':'つ','て':'て','ど':'と','ば':'は','び':'ひ','ぶ':'ふ','べ':'へ','ぼ':'ほ'};
+const handakutenMap = {'は':'ぱ','ひ':'ぴ','ふ':'ぷ','へ':'ぺ','ほ':'ぼ','ぱ':'は','ぴ':'ひ','ぷ':'ふ','ぺ':'へ','ぽ':'ほ'};
+const smallMap = {'あ':'ぁ','い':'ぃ','う':'ぅ','え':'ぇ','お':'ぉ','つ':'っ','や':'ゃ','ゆ':'ゅ','よ':'よ','わ':'ゎ','ぁ':'あ','ぃ':'い','ぅ':'う','ぇ':'え','ぉ':'お','っ':'つ','ゃ':'や','ゅ':'ゆ','ょ':'よ','ゎ':'わ'};
+
+function speak(text) {
+    if(!text) return;
+    window.speechSynthesis.cancel();
+    const uttr = new SpeechSynthesisUtterance(text);
+    uttr.lang = 'ja-JP';
+    window.speechSynthesis.speak(uttr);
+}
+
+function beep(freq = 800, duration = 50) {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    oscillator.connect(audioCtx.destination);
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + duration / 1000);
+}
+
+function updateHighlight() {
+    keys.forEach(k => k.classList.remove('active'));
+    const index = currentRow * COL_COUNT + currentCol;
+    if (keys[index]) keys[index].classList.add('active');
+    dirDiv.innerText = `方向: ${currentDir === 'NONE' ? '停止中' : currentDir}`;
+}
+
+function getDist(p1, p2) {
+    return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+}
+
+function onResults(results) {
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        const landmarks = results.multiFaceLandmarks[0];
+        const now = performance.now();
+
+        if (!isCalibrated) {
+            statusDiv.innerText = "キャリブレーション中...";
+            calibrationData = {
+                faceH: landmarks[152].y - landmarks[10].y,
+                eyebrowDist: ((landmarks[159].y - landmarks[105].y) + (landmarks[386].y - landmarks[334].y)) / 2,
+                innerEyebrowDist: getDist(landmarks[55], landmarks[285]),
+                lipVerticalDist: getDist(landmarks[0], landmarks[17]),
+                mouthOpen: landmarks[16].y - landmarks[11].y,
+                leftCornerDist: landmarks[270].y - landmarks[203].y,
+                rightCornerDist: landmarks[40].y - landmarks[423].y,
+                puckerWidth: landmarks[270].x - landmarks[40].x
+            };
+            isCalibrated = true;
+            speak("システムを開始しました。");
+            return;
+        }
+
+        if (isResetting) return;
+        const hirituY = (landmarks[152].y - landmarks[10].y) / calibrationData.faceH;
+
+        // --- 口あけ判定：ここでの基準 isOpen は下移動も停止も共通 ---
+        const currentMouthOpen = landmarks[16].y - landmarks[11].y;
+        const isOpen = currentMouthOpen > (calibrationData.mouthOpen * MOUTH_OPEN_SENSITIVITY * hirituY);
+
+        if (isOpen) {
+            if (mouthOpenStartTime === 0) {
+                mouthOpenStartTime = now;
+                isStopActionTriggered = false;
+            } else if (!isStopActionTriggered && (now - mouthOpenStartTime) > STOP_HOLD_TIME) {
+                // 同じ開きを2秒維持できたら「停止」
+                currentDir = 'NONE';
+                beep(400, 200);
+                isStopActionTriggered = true; 
+            }
+        } else {
+            // 口を閉じた時
+            if (mouthOpenStartTime !== 0) {
+                // 停止アクションに至っていなければ「下移動」を開始
+                if (!isStopActionTriggered) {
+                    currentDir = 'DOWN';
+                    beep(600, 50);
+                }
+                mouthOpenStartTime = 0;
+                isStopActionTriggered = false;
+                lastTriggerTime = now;
+            }
+        }
+
+        // --- その他の判定 (口が閉じている間のみ有効) ---
+        if (!isOpen && now - lastTriggerTime > TRIGGER_WAIT) {
+            if ((landmarks[270].y - landmarks[203].y) < calibrationData.leftCornerDist * 0.75 * hirituY) {
+                currentDir = 'LEFT'; beep(600, 50); lastTriggerTime = now;
+            }
+            else if ((landmarks[40].y - landmarks[423].y) < calibrationData.rightCornerDist * 0.75 * hirituY) {
+                currentDir = 'RIGHT'; beep(600, 50); lastTriggerTime = now;
+            }
+            else {
+                const currentEyebrow = ((landmarks[159].y - landmarks[105].y) + (landmarks[386].y - landmarks[334].y)) / 2;
+                const currentInnerEyebrow = getDist(landmarks[55], landmarks[285]);
+                const currentLipVertical = getDist(landmarks[0], landmarks[17]);
+                const pucker = landmarks[270].x - landmarks[40].x;
+
+                const isClick = 
+                    (currentEyebrow > calibrationData.eyebrowDist * 1.35 * hirituY) || 
+                    (currentInnerEyebrow < calibrationData.innerEyebrowDist * 0.80) || 
+                    (currentLipVertical < calibrationData.lipVerticalDist * 0.65) ||  
+                    (pucker < calibrationData.puckerWidth * PUCKER_SENSITIVITY); 
+
+                if (isClick) {
+                    const index = currentRow * COL_COUNT + currentCol;
+                    keys[index].click();
+                    lastTriggerTime = now;
+                }
+            }
+        }
+
+        // --- オートスキャン ---
+        if (currentDir !== 'NONE' && now - lastScanTime > SCAN_INTERVAL) {
+            if (currentDir === 'LEFT') currentCol = (currentCol - 1 + COL_COUNT) % COL_COUNT;
+            else if (currentDir === 'RIGHT') currentCol = (currentCol + 1) % COL_COUNT;
+            else if (currentDir === 'DOWN') currentRow = (currentRow + 1) % ROW_COUNT;
+            updateHighlight();
+            lastScanTime = now;
+        }
+        
+        if (mouthOpenStartTime > 0) {
+            statusDiv.innerText = isStopActionTriggered ? "停止済み：口を閉じてください" : "ホールド中（2秒で停止）";
+        } else {
+            statusDiv.innerText = "実行中";
+        }
+    }
+    canvasCtx.restore();
+}
+
+function handleKeyAction(val) {
+    if (isResetting) return;
+    const currentText = textarea.value;
+    const lastChar = currentText.slice(-1);
+
+    if (val === 'リセット') {
+        isResetting = true;
+        currentDir = 'NONE';
+        updateHighlight();
+        speak("リセットします。眉を下げてお待ちください。");
+        setTimeout(() => {
+            textarea.value = '';
+            isCalibrated = false;
+            isResetting = false;
+            currentRow = 0; currentCol = 0;
+            updateHighlight();
+        }, 1000);
+        return;
+    }
+
+    beep(1000, 80);
+    if (val === '話す') speak(currentText);
+    else if (val === '一字消') textarea.value = currentText.slice(0, -1);
+    else if (val === '全消去') textarea.value = '';
+    else if (val === '空白') textarea.value += ' ';
+    else if (val === '゛') {
+        if (lastChar && dakutenMap[lastChar]) textarea.value = currentText.slice(0, -1) + dakutenMap[lastChar];
+    } else if (val === '゜') {
+        if (lastChar && handakutenMap[lastChar]) textarea.value = currentText.slice(0, -1) + handakutenMap[lastChar];
+    } else if (val === '小文字') {
+        if (lastChar && smallMap[lastChar]) textarea.value = currentText.slice(0, -1) + smallMap[lastChar];
+    } else if (val.length === 1) {
+        textarea.value += val;
+    }
+    textarea.scrollTop = textarea.scrollHeight;
+}
+
+keys.forEach(key => {
+    key.addEventListener('click', () => handleKeyAction(key.innerText));
+});
+
+const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+faceMesh.onResults(onResults);
+
+const camera = new Camera(videoElement, {
+    onFrame: async () => {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+        await faceMesh.send({image: videoElement});
+    },
+    width: 1280, height: 720
+});
+camera.start();
+</script>
+</body>
+</html>
